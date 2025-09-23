@@ -1,4 +1,4 @@
-name: Build Russian GeoIP data files
+name: Build GeoIP for Russia
 on:
   workflow_dispatch:
   schedule:
@@ -15,8 +15,8 @@ jobs:
     steps:
       - name: Set variables
         run: |
-          echo "RELEASE_NAME=Russian GeoIP Released on $(date +%Y%m%d%H%M)" >> $GITHUB_ENV
-          echo "TAG_NAME=ru-$(date +%Y%m%d%H%M)" >> $GITHUB_ENV
+          echo "RELEASE_NAME=Released on $(date +%Y%m%d%H%M)" >> $GITHUB_ENV
+          echo "TAG_NAME=$(date +%Y%m%d%H%M)" >> $GITHUB_ENV
           # MaxMind GeoLite2 Country CSV data
           echo "MAXMIND_COUNTRY_URL=https://github.com/Loyalsoldier/geoip/raw/release/GeoLite2-Country-CSV.zip" >> $GITHUB_ENV
           # Russian IP ranges from RIPE database
@@ -46,7 +46,10 @@ jobs:
         run: |
           cd workspace
           wget -O GeoLite2-Country-CSV.zip "$MAXMIND_COUNTRY_URL"
-          unzip GeoLite2-Country-CSV.zip
+          unzip -q GeoLite2-Country-CSV.zip
+          ls -la
+          # Remove zip file to avoid confusion
+          rm GeoLite2-Country-CSV.zip
 
       - name: Get Russian IP ranges from RIPE
         run: |
@@ -61,19 +64,24 @@ jobs:
           import csv
           import ipaddress
           import os
+          import glob
 
-          # Find MaxMind directory
+          # Find MaxMind directory (it's extracted from zip)
           maxmind_dir = None
           for item in os.listdir('.'):
-              if item.startswith('GeoLite2-Country-CSV'):
+              if os.path.isdir(item) and 'GeoLite2-Country-CSV' in item:
                   maxmind_dir = item
                   break
 
           if not maxmind_dir:
               print("MaxMind directory not found")
+              print("Available files and directories:")
+              for item in os.listdir('.'):
+                  print(f"  {item} ({'dir' if os.path.isdir(item) else 'file'})")
               exit(1)
 
           print(f"Processing MaxMind data from: {maxmind_dir}")
+          print(f"Directory contents: {os.listdir(maxmind_dir)}")
 
           # Read country locations to find Russia's geoname_id
           russia_ids = set()
@@ -316,7 +324,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: russian-geoip-${{ env.TAG_NAME }}
+          name: geoip-${{ env.TAG_NAME }}
           path: publish/*
 
       - name: Create Release
@@ -325,7 +333,7 @@ jobs:
           tag_name: ${{ env.TAG_NAME }}
           name: ${{ env.RELEASE_NAME }}
           body: |
-            # Russian GeoIP Data Release
+            # GeoIP Data Release
 
             Automatically generated Russian IP address ranges for proxy routing.
 
@@ -359,8 +367,8 @@ jobs:
           git init
           git config --local user.name "github-actions[bot]"
           git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b russian-geoip
+          git checkout -b release
           git add .
           git commit -m "${{ env.RELEASE_NAME }}"
           git remote add origin "https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
-          git push -f -u origin russian-geoip
+          git push -f -u origin release
