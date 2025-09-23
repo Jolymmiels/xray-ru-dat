@@ -278,13 +278,23 @@ jobs:
                 "action": "add",
                 "args": {
                   "name": "ru",
-                  "uri": "../russian-ip-combined.txt"
+                  "uri": "../russian-ip-combined.txt",
+                  "onlyIPType": "ipv4"
+                }
+              },
+              {
+                "type": "text",
+                "action": "add",
+                "args": {
+                  "name": "ru",
+                  "uri": "../russian-ip-combined.txt",
+                  "onlyIPType": "ipv6"
                 }
               }
             ],
             "output": [
               {
-                "type": "dat",
+                "type": "v2rayGeoIPDat",
                 "action": "output",
                 "args": {
                   "outputDir": "../output",
