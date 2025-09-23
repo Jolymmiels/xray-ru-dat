@@ -262,6 +262,103 @@ jobs:
           print(f"Statistics: {ranges} ranges, {ipv4_count:,} IPv4, {ipv6_count:,} IPv6")
           EOF
 
+      - name: Create additional IP categories
+        run: |
+          cd workspace
+          python3 << 'EOF'
+          import ipaddress
+          import urllib.request
+          import json
+
+          def get_private_ranges():
+              """Get private IP ranges"""
+              private_ranges = [
+                  "10.0.0.0/8",
+                  "172.16.0.0/12",
+                  "192.168.0.0/16",
+                  "127.0.0.0/8",
+                  "169.254.0.0/16",
+                  "224.0.0.0/4",
+                  "::1/128",
+                  "fc00::/7",
+                  "fe80::/10",
+                  "ff00::/8"
+              ]
+
+              with open('private-ranges.txt', 'w') as f:
+                  for range_str in private_ranges:
+                      f.write(f"{range_str}\n")
+
+              print(f"Created private ranges file with {len(private_ranges)} ranges")
+              return private_ranges
+
+          def get_telegram_ranges():
+              """Get Telegram IP ranges"""
+              telegram_ranges = [
+                  "149.154.160.0/20",
+                  "149.154.164.0/22",
+                  "149.154.168.0/22",
+                  "149.154.172.0/22",
+                  "91.108.4.0/22",
+                  "91.108.8.0/22",
+                  "91.108.12.0/22",
+                  "91.108.16.0/22",
+                  "91.108.20.0/22",
+                  "91.108.56.0/22",
+                  "95.161.64.0/20",
+                  "2001:b28:f23c::/48",
+                  "2001:b28:f23d::/48",
+                  "2001:b28:f23f::/48",
+                  "2001:67c:4e8::/48"
+              ]
+
+              with open('telegram-ranges.txt', 'w') as f:
+                  for range_str in telegram_ranges:
+                      f.write(f"{range_str}\n")
+
+              print(f"Created Telegram ranges file with {len(telegram_ranges)} ranges")
+              return telegram_ranges
+
+          def get_facebook_ranges():
+              """Get Facebook IP ranges"""
+              facebook_ranges = [
+                  "31.13.24.0/21",
+                  "31.13.64.0/18",
+                  "31.13.68.0/22",
+                  "31.13.72.0/21",
+                  "31.13.80.0/20",
+                  "31.13.96.0/19",
+                  "66.220.144.0/20",
+                  "66.220.160.0/19",
+                  "69.63.176.0/20",
+                  "69.171.224.0/19",
+                  "74.119.76.0/22",
+                  "103.4.96.0/22",
+                  "129.134.0.0/17",
+                  "157.240.0.0/17",
+                  "173.252.64.0/19",
+                  "173.252.96.0/19",
+                  "179.60.192.0/22",
+                  "185.60.216.0/22",
+                  "204.15.20.0/22",
+                  "2a03:2880::/32",
+                  "2620:0:1c00::/40",
+                  "2620:0:1cff::/48",
+                  "2a03:2880:f000::/36"
+              ]
+
+              with open('facebook-ranges.txt', 'w') as f:
+                  for range_str in facebook_ranges:
+                      f.write(f"{range_str}\n")
+
+              print(f"Created Facebook ranges file with {len(facebook_ranges)} ranges")
+              return facebook_ranges
+
+          private_ranges = get_private_ranges()
+          telegram_ranges = get_telegram_ranges()
+          facebook_ranges = get_facebook_ranges()
+          EOF
+
       - name: Download and setup geoip generation tools
         run: |
           cd workspace
@@ -269,7 +366,7 @@ jobs:
           git clone https://github.com/Loyalsoldier/geoip.git geoip-tool
           cd geoip-tool
 
-          # Create custom config for Russian IPs
+          # Create custom config for all IP categories
           cat > config.json << 'EOF'
           {
             "input": [
@@ -278,17 +375,31 @@ jobs:
                 "action": "add",
                 "args": {
                   "name": "ru",
-                  "uri": "../russian-ip-combined.txt",
-                  "onlyIPType": "ipv4"
+                  "uri": "../russian-ip-combined.txt"
                 }
               },
               {
                 "type": "text",
                 "action": "add",
                 "args": {
-                  "name": "ru",
-                  "uri": "../russian-ip-combined.txt",
-                  "onlyIPType": "ipv6"
+                  "name": "private",
+                  "uri": "../private-ranges.txt"
+                }
+              },
+              {
+                "type": "text",
+                "action": "add",
+                "args": {
+                  "name": "telegram",
+                  "uri": "../telegram-ranges.txt"
+                }
+              },
+              {
+                "type": "text",
+                "action": "add",
+                "args": {
+                  "name": "facebook",
+                  "uri": "../facebook-ranges.txt"
                 }
               }
             ],
@@ -322,6 +433,9 @@ jobs:
           cp russian-ipv4-final.txt ../publish/
           cp russian-ipv6-final.txt ../publish/
           cp russian-ip-combined.txt ../publish/
+          cp private-ranges.txt ../publish/
+          cp telegram-ranges.txt ../publish/
+          cp facebook-ranges.txt ../publish/
           cp RUSSIAN_GEOIP_README.md ../publish/
 
           # Generate checksums
@@ -348,10 +462,13 @@ jobs:
             Automatically generated Russian IP address ranges for proxy routing.
 
             ## Files included:
-            - `geoip.dat` - Binary dat file for V2Ray/Xray
-            - `russian-ipv4-final.txt` - IPv4 ranges in CIDR format
-            - `russian-ipv6-final.txt` - IPv6 ranges in CIDR format
-            - `russian-ip-combined.txt` - Combined IPv4/IPv6 ranges
+            - `geoip.dat` - Binary dat file for V2Ray/Xray (includes ru, private, telegram, facebook)
+            - `russian-ipv4-final.txt` - Russian IPv4 ranges in CIDR format
+            - `russian-ipv6-final.txt` - Russian IPv6 ranges in CIDR format
+            - `russian-ip-combined.txt` - Combined Russian IPv4/IPv6 ranges
+            - `private-ranges.txt` - Private IP ranges
+            - `telegram-ranges.txt` - Telegram IP ranges
+            - `facebook-ranges.txt` - Facebook/Meta IP ranges
             - `RUSSIAN_GEOIP_README.md` - Statistics and usage info
             - `checksums.sha256` - File checksums
 
@@ -360,7 +477,12 @@ jobs:
             {
               "type": "field",
               "outboundTag": "direct",
-              "ip": ["geoip:ru"]
+              "ip": ["geoip:ru", "geoip:private"]
+            },
+            {
+              "type": "field",
+              "outboundTag": "proxy",
+              "ip": ["geoip:telegram", "geoip:facebook"]
             }
             ```
 
