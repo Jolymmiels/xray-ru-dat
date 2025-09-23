@@ -1,0 +1,366 @@
+name: Build Russian GeoIP data files
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * *"  # Daily at 6:00 UTC (9:00 Moscow time)
+  push:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/build-russian-geoip.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set variables
+        run: |
+          echo "RELEASE_NAME=Russian GeoIP Released on $(date +%Y%m%d%H%M)" >> $GITHUB_ENV
+          echo "TAG_NAME=ru-$(date +%Y%m%d%H%M)" >> $GITHUB_ENV
+          # MaxMind GeoLite2 Country CSV data
+          echo "MAXMIND_COUNTRY_URL=https://github.com/Loyalsoldier/geoip/raw/release/GeoLite2-Country-CSV.zip" >> $GITHUB_ENV
+          # Russian IP ranges from RIPE database
+          echo "RIPE_RU_URL=https://stat.ripe.net/data/country-resource-list/data.json?resource=RU" >> $GITHUB_ENV
+          # Russian IP ranges from ip2location
+          echo "IP2LOCATION_RU_URL=https://download.ip2location.com/lite/IP2LOCATION-LITE-DB1.CSV.ZIP" >> $GITHUB_ENV
+        shell: bash
+
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.21'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget unzip jq python3-pip
+          pip3 install ipaddress requests
+
+      - name: Create workspace directory
+        run: mkdir -p workspace && cd workspace
+
+      - name: Download MaxMind GeoLite2 Country data
+        run: |
+          cd workspace
+          wget -O GeoLite2-Country-CSV.zip "$MAXMIND_COUNTRY_URL"
+          unzip GeoLite2-Country-CSV.zip
+
+      - name: Get Russian IP ranges from RIPE
+        run: |
+          cd workspace
+          curl -sSL "$RIPE_RU_URL" | jq -r '.data.resources.ipv4[]' > ripe-ru-ipv4.txt
+          curl -sSL "$RIPE_RU_URL" | jq -r '.data.resources.ipv6[]' > ripe-ru-ipv6.txt
+
+      - name: Extract Russian IPs from MaxMind data
+        run: |
+          cd workspace
+          python3 << 'EOF'
+          import csv
+          import ipaddress
+          import os
+
+          # Find MaxMind directory
+          maxmind_dir = None
+          for item in os.listdir('.'):
+              if item.startswith('GeoLite2-Country-CSV'):
+                  maxmind_dir = item
+                  break
+
+          if not maxmind_dir:
+              print("MaxMind directory not found")
+              exit(1)
+
+          print(f"Processing MaxMind data from: {maxmind_dir}")
+
+          # Read country locations to find Russia's geoname_id
+          russia_ids = set()
+          with open(f'{maxmind_dir}/GeoLite2-Country-Locations-en.csv', 'r', encoding='utf-8') as f:
+              reader = csv.DictReader(f)
+              for row in reader:
+                  if row['country_iso_code'] == 'RU':
+                      russia_ids.add(row['geoname_id'])
+
+          print(f"Found Russia geoname_ids: {russia_ids}")
+
+          # Extract Russian IP blocks
+          ipv4_blocks = []
+          ipv6_blocks = []
+
+          with open(f'{maxmind_dir}/GeoLite2-Country-Blocks-IPv4.csv', 'r') as f:
+              reader = csv.DictReader(f)
+              for row in reader:
+                  if row['geoname_id'] in russia_ids:
+                      ipv4_blocks.append(row['network'])
+
+          with open(f'{maxmind_dir}/GeoLite2-Country-Blocks-IPv6.csv', 'r') as f:
+              reader = csv.DictReader(f)
+              for row in reader:
+                  if row['geoname_id'] in russia_ids:
+                      ipv6_blocks.append(row['network'])
+
+          # Write results
+          with open('maxmind-ru-ipv4.txt', 'w') as f:
+              for block in sorted(ipv4_blocks):
+                  f.write(f"{block}\n")
+
+          with open('maxmind-ru-ipv6.txt', 'w') as f:
+              for block in sorted(ipv6_blocks):
+                  f.write(f"{block}\n")
+
+          print(f"Extracted {len(ipv4_blocks)} IPv4 blocks and {len(ipv6_blocks)} IPv6 blocks from MaxMind")
+          EOF
+
+      - name: Merge and deduplicate Russian IP ranges
+        run: |
+          cd workspace
+          python3 << 'EOF'
+          import ipaddress
+          from collections import defaultdict
+
+          def read_ip_ranges(filename):
+              ranges = []
+              try:
+                  with open(filename, 'r') as f:
+                      for line in f:
+                          line = line.strip()
+                          if line and not line.startswith('#'):
+                              try:
+                                  # Handle different formats
+                                  if '/' in line:
+                                      ranges.append(ipaddress.ip_network(line, strict=False))
+                                  elif '-' in line:
+                                      # Convert range to CIDR
+                                      start, end = line.split('-')
+                                      start_ip = ipaddress.ip_address(start.strip())
+                                      end_ip = ipaddress.ip_address(end.strip())
+                                      ranges.extend(ipaddress.summarize_address_range(start_ip, end_ip))
+                              except Exception as e:
+                                  print(f"Error processing line '{line}': {e}")
+              except FileNotFoundError:
+                  print(f"File {filename} not found, skipping")
+              return ranges
+
+          # Collect all IPv4 ranges
+          ipv4_ranges = []
+          ipv4_ranges.extend(read_ip_ranges('maxmind-ru-ipv4.txt'))
+          ipv4_ranges.extend(read_ip_ranges('ripe-ru-ipv4.txt'))
+
+          # Collect all IPv6 ranges
+          ipv6_ranges = []
+          ipv6_ranges.extend(read_ip_ranges('maxmind-ru-ipv6.txt'))
+          ipv6_ranges.extend(read_ip_ranges('ripe-ru-ipv6.txt'))
+
+          # Merge and optimize ranges
+          def optimize_ranges(ranges):
+              if not ranges:
+                  return []
+              # Sort ranges and merge overlapping ones
+              ranges = sorted(set(ranges))
+              merged = [ranges[0]]
+              for current in ranges[1:]:
+                  last = merged[-1]
+                  try:
+                      # Check if ranges can be merged
+                      if (current.network_address <= last.broadcast_address + 1 and
+                          current.version == last.version):
+                          # Merge ranges
+                          start = min(last.network_address, current.network_address)
+                          end = max(last.broadcast_address, current.broadcast_address)
+                          merged_ranges = list(ipaddress.summarize_address_range(start, end))
+                          merged[-1:] = merged_ranges
+                      else:
+                          merged.append(current)
+                  except:
+                      merged.append(current)
+              return merged
+
+          optimized_ipv4 = optimize_ranges(ipv4_ranges)
+          optimized_ipv6 = optimize_ranges(ipv6_ranges)
+
+          # Write final results
+          with open('russian-ipv4-final.txt', 'w') as f:
+              for network in optimized_ipv4:
+                  f.write(f"{network}\n")
+
+          with open('russian-ipv6-final.txt', 'w') as f:
+              for network in optimized_ipv6:
+                  f.write(f"{network}\n")
+
+          print(f"Final result: {len(optimized_ipv4)} IPv4 ranges, {len(optimized_ipv6)} IPv6 ranges")
+
+          # Create combined file for dat generation
+          with open('russian-ip-combined.txt', 'w') as f:
+              for network in optimized_ipv4:
+                  f.write(f"{network}\n")
+              for network in optimized_ipv6:
+                  f.write(f"{network}\n")
+          EOF
+
+      - name: Generate statistics
+        run: |
+          cd workspace
+          python3 << 'EOF'
+          import ipaddress
+
+          def count_ips_in_file(filename):
+              total_ipv4 = 0
+              total_ipv6 = 0
+              ranges = 0
+
+              with open(filename, 'r') as f:
+                  for line in f:
+                      line = line.strip()
+                      if line:
+                          try:
+                              network = ipaddress.ip_network(line)
+                              ranges += 1
+                              if network.version == 4:
+                                  total_ipv4 += network.num_addresses
+                              else:
+                                  total_ipv6 += network.num_addresses
+                          except:
+                              pass
+
+              return ranges, total_ipv4, total_ipv6
+
+          ranges, ipv4_count, ipv6_count = count_ips_in_file('russian-ip-combined.txt')
+
+          stats = f"""# Russian GeoIP Statistics
+
+          Generated on: $(date)
+
+          ## Summary
+          - Total IP ranges: {ranges:,}
+          - IPv4 addresses: {ipv4_count:,}
+          - IPv6 addresses: {ipv6_count:,}
+
+          ## Sources
+          - MaxMind GeoLite2 Country Database
+          - RIPE Database for Russian resources
+
+          ## Usage
+          This file contains IP ranges assigned to Russia and can be used with:
+          - V2Ray/Xray (geoip:ru)
+          - Clash (GEOIP,RU)
+          - Other proxy tools supporting GeoIP
+          """
+
+          with open('RUSSIAN_GEOIP_README.md', 'w') as f:
+              f.write(stats)
+
+          print(f"Statistics: {ranges} ranges, {ipv4_count:,} IPv4, {ipv6_count:,} IPv6")
+          EOF
+
+      - name: Download and setup geoip generation tools
+        run: |
+          cd workspace
+          # Download the geoip generation tool
+          git clone https://github.com/Loyalsoldier/geoip.git geoip-tool
+          cd geoip-tool
+
+          # Create custom config for Russian IPs
+          cat > config.json << 'EOF'
+          {
+            "input": [
+              {
+                "type": "text",
+                "action": "add",
+                "args": {
+                  "name": "ru",
+                  "uri": "../russian-ip-combined.txt"
+                }
+              }
+            ],
+            "output": [
+              {
+                "type": "dat",
+                "action": "output",
+                "args": {
+                  "outputDir": "../output",
+                  "outputName": "geoip.dat"
+                }
+              }
+            ]
+          }
+          EOF
+
+      - name: Generate Russian GeoIP dat file
+        run: |
+          cd workspace/geoip-tool
+          mkdir -p ../output
+          go mod tidy
+          go run ./ --config=config.json
+
+      - name: Create release files
+        run: |
+          cd workspace
+          mkdir -p ../publish
+
+          # Copy generated files
+          cp output/geoip.dat ../publish/
+          cp russian-ipv4-final.txt ../publish/
+          cp russian-ipv6-final.txt ../publish/
+          cp russian-ip-combined.txt ../publish/
+          cp RUSSIAN_GEOIP_README.md ../publish/
+
+          # Generate checksums
+          cd ../publish
+          sha256sum *.dat *.txt > checksums.sha256
+
+          # Create zip archive
+          zip -r russian-geoip-$(date +%Y%m%d).zip *.dat *.txt *.md checksums.sha256
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: russian-geoip-${{ env.TAG_NAME }}
+          path: publish/*
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: ${{ env.RELEASE_NAME }}
+          body: |
+            # Russian GeoIP Data Release
+
+            Automatically generated Russian IP address ranges for proxy routing.
+
+            ## Files included:
+            - `geoip.dat` - Binary dat file for V2Ray/Xray
+            - `russian-ipv4-final.txt` - IPv4 ranges in CIDR format
+            - `russian-ipv6-final.txt` - IPv6 ranges in CIDR format
+            - `russian-ip-combined.txt` - Combined IPv4/IPv6 ranges
+            - `RUSSIAN_GEOIP_README.md` - Statistics and usage info
+            - `checksums.sha256` - File checksums
+
+            ## Usage with V2Ray/Xray:
+            ```json
+            {
+              "type": "field",
+              "outboundTag": "direct",
+              "ip": ["geoip:ru"]
+            }
+            ```
+
+            Generated from MaxMind GeoLite2 and RIPE database on $(date).
+          files: publish/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Git for branch push
+        run: |
+          cd publish
+          git init
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b russian-geoip
+          git add .
+          git commit -m "${{ env.RELEASE_NAME }}"
+          git remote add origin "https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
+          git push -f -u origin russian-geoip
