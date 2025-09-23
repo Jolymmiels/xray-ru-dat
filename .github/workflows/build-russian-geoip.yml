@@ -300,7 +300,7 @@ jobs:
           cd workspace/geoip-tool
           mkdir -p ../output
           go mod tidy
-          go run ./ --config=config.json
+          go run ./ convert --config=config.json
 
       - name: Create release files
         run: |
