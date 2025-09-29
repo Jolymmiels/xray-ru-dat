@@ -2,7 +2,7 @@ name: Build GeoIP for Russia
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 6 * * *"  # Daily at 6:00 UTC (9:00 Moscow time)
+    - cron: "0 6 * * 2"  # Weekly on Tuesday at 6:00 UTC (MaxMind publishes updates on Tuesdays)
   push:
     branches:
       - master
@@ -12,37 +12,69 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      MAXMIND_COUNTRY_URL: https://github.com/Loyalsoldier/geoip/raw/release/GeoLite2-Country-CSV.zip
     steps:
-      - name: Set variables
-        run: |
-          echo "RELEASE_NAME=Released on $(date +%Y%m%d%H%M)" >> $GITHUB_ENV
-          echo "TAG_NAME=$(date +%Y%m%d%H%M)" >> $GITHUB_ENV
-          # MaxMind GeoLite2 Country CSV data
-          echo "MAXMIND_COUNTRY_URL=https://github.com/Loyalsoldier/geoip/raw/release/GeoLite2-Country-CSV.zip" >> $GITHUB_ENV
-          # Russian IP ranges from RIPE database
-          echo "RIPE_RU_URL=https://stat.ripe.net/data/country-resource-list/data.json?resource=RU" >> $GITHUB_ENV
-          # Russian IP ranges from ip2location
-          echo "IP2LOCATION_RU_URL=https://download.ip2location.com/lite/IP2LOCATION-LITE-DB1.CSV.ZIP" >> $GITHUB_ENV
-        shell: bash
-
       - name: Checkout repository
         uses: actions/checkout@v5
 
+      - name: Check MaxMind dataset freshness
+        id: check-update
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          HEADERS=$(curl -sI "$MAXMIND_COUNTRY_URL")
+          LAST_MODIFIED=$(echo "$HEADERS" | grep -i '^last-modified:' | cut -d: -f2- | xargs || true)
+          if [ -z "$LAST_MODIFIED" ]; then
+            echo "Unable to determine MaxMind dataset timestamp"
+            exit 1
+          fi
+          MAXMIND_DATE=$(date -u -d "$LAST_MODIFIED" +%Y%m%d)
+          echo "MaxMind release date: $MAXMIND_DATE"
+          echo "maxmind_date=$MAXMIND_DATE" >> $GITHUB_OUTPUT
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/maxmind-$MAXMIND_DATE")
+          if [ "$STATUS" = "200" ]; then
+            echo "release_exists=true" >> $GITHUB_OUTPUT
+            echo "No new MaxMind dataset available, skipping build"
+          else
+            echo "release_exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Skip build (dataset already released)
+        if: steps.check-update.outputs.release_exists == 'true'
+        run: |
+          echo "Release maxmind-${{ steps.check-update.outputs.maxmind_date }} already exists. Skipping remaining steps."
+
+      - name: Set release metadata
+        if: steps.check-update.outputs.release_exists == 'false'
+        run: |
+          DATE="${{ steps.check-update.outputs.maxmind_date }}"
+          echo "RELEASE_NAME=MaxMind GeoIP ${DATE}" >> $GITHUB_ENV
+          echo "TAG_NAME=maxmind-${DATE}" >> $GITHUB_ENV
+
       - name: Setup Go
+        if: steps.check-update.outputs.release_exists == 'false'
         uses: actions/setup-go@v6
         with:
           go-version: '1.24'
 
       - name: Install dependencies
+        if: steps.check-update.outputs.release_exists == 'false'
         run: |
           sudo apt-get update
           sudo apt-get install -y wget unzip jq python3-pip
           pip3 install ipaddress requests
 
       - name: Create workspace directory
+        if: steps.check-update.outputs.release_exists == 'false'
         run: mkdir -p workspace && cd workspace
 
       - name: Download MaxMind GeoLite2 Country data
+        if: steps.check-update.outputs.release_exists == 'false'
         run: |
           cd workspace
           wget -O GeoLite2-Country-CSV.zip "$MAXMIND_COUNTRY_URL"
@@ -51,13 +83,8 @@ jobs:
           # Remove zip file to avoid confusion
           rm GeoLite2-Country-CSV.zip
 
-      - name: Get Russian IP ranges from RIPE
-        run: |
-          cd workspace
-          curl -sSL "$RIPE_RU_URL" | jq -r '.data.resources.ipv4[]' > ripe-ru-ipv4.txt
-          curl -sSL "$RIPE_RU_URL" | jq -r '.data.resources.ipv6[]' > ripe-ru-ipv6.txt
-
       - name: Extract Russian IPs from MaxMind data
+        if: steps.check-update.outputs.release_exists == 'false'
         run: |
           cd workspace
           python3 << 'EOF'
@@ -122,6 +149,7 @@ jobs:
           EOF
 
       - name: Merge and deduplicate Russian IP ranges
+        if: steps.check-update.outputs.release_exists == 'false'
         run: |
           cd workspace
           python3 << 'EOF'
@@ -154,12 +182,10 @@ jobs:
           # Collect all IPv4 ranges
           ipv4_ranges = []
           ipv4_ranges.extend(read_ip_ranges('maxmind-ru-ipv4.txt'))
-          ipv4_ranges.extend(read_ip_ranges('ripe-ru-ipv4.txt'))
 
           # Collect all IPv6 ranges
           ipv6_ranges = []
           ipv6_ranges.extend(read_ip_ranges('maxmind-ru-ipv6.txt'))
-          ipv6_ranges.extend(read_ip_ranges('ripe-ru-ipv6.txt'))
 
           # Merge and optimize ranges
           def optimize_ranges(ranges):
@@ -208,6 +234,7 @@ jobs:
           EOF
 
       - name: Generate statistics
+        if: steps.check-update.outputs.release_exists == 'false'
         run: |
           cd workspace
           python3 << 'EOF'
@@ -247,7 +274,6 @@ jobs:
 
           ## Sources
           - MaxMind GeoLite2 Country Database
-          - RIPE Database for Russian resources
 
           ## Usage
           This file contains IP ranges assigned to Russia and can be used with:
@@ -263,6 +289,7 @@ jobs:
           EOF
 
       - name: Create additional IP categories
+        if: steps.check-update.outputs.release_exists == 'false'
         run: |
           cd workspace
           python3 << 'EOF'
@@ -271,26 +298,45 @@ jobs:
           import json
 
           def get_private_ranges():
-              """Get private IP ranges"""
-              private_ranges = [
+              """Get bogon IP ranges"""
+              bogon_networks = [
+                  # IPv4 bogons
+                  "0.0.0.0/8",
                   "10.0.0.0/8",
-                  "172.16.0.0/12",
-                  "192.168.0.0/16",
+                  "100.64.0.0/10",
                   "127.0.0.0/8",
                   "169.254.0.0/16",
+                  "172.16.0.0/12",
+                  "192.0.0.0/24",
+                  "192.0.2.0/24",
+                  "192.88.99.0/24",
+                  "192.168.0.0/16",
+                  "198.18.0.0/15",
+                  "198.51.100.0/24",
+                  "203.0.113.0/24",
                   "224.0.0.0/4",
+                  "240.0.0.0/4",
+                  "255.255.255.255/32",
+
+                  # IPv6 bogons
+                  "::/128",
                   "::1/128",
+                  "64:ff9b::/96",
+                  "100::/64",
+                  "2001::/32",
+                  "2001:10::/28",
+                  "2001:db8::/32",
                   "fc00::/7",
                   "fe80::/10",
-                  "ff00::/8"
+                  "ff00::/8",
               ]
 
               with open('private-ranges.txt', 'w') as f:
-                  for range_str in private_ranges:
+                  for range_str in bogon_networks:
                       f.write(f"{range_str}\n")
 
-              print(f"Created private ranges file with {len(private_ranges)} ranges")
-              return private_ranges
+              print(f"Created private ranges file with {len(bogon_networks)} ranges")
+              return bogon_networks
 
           def get_telegram_ranges():
               """Get Telegram IP ranges"""
@@ -360,6 +406,7 @@ jobs:
           EOF
 
       - name: Download and setup geoip generation tools
+        if: steps.check-update.outputs.release_exists == 'false'
         run: |
           cd workspace
           # Download the geoip generation tool
@@ -417,6 +464,7 @@ jobs:
           EOF
 
       - name: Generate Russian GeoIP dat file
+        if: steps.check-update.outputs.release_exists == 'false'
         run: |
           cd workspace/geoip-tool
           mkdir -p ../output
@@ -424,6 +472,7 @@ jobs:
           go run ./ convert --config=config.json
 
       - name: Create release files
+        if: steps.check-update.outputs.release_exists == 'false'
         run: |
           cd workspace
           mkdir -p ../publish
@@ -446,12 +495,14 @@ jobs:
           zip -r russian-geoip-$(date +%Y%m%d).zip *.dat *.txt *.md checksums.sha256
 
       - name: Upload artifacts
+        if: steps.check-update.outputs.release_exists == 'false'
         uses: actions/upload-artifact@v4
         with:
           name: geoip-${{ env.TAG_NAME }}
           path: publish/*
 
       - name: Create Release
+        if: steps.check-update.outputs.release_exists == 'false'
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ env.TAG_NAME }}
@@ -466,7 +517,7 @@ jobs:
             - `russian-ipv4-final.txt` - Russian IPv4 ranges in CIDR format
             - `russian-ipv6-final.txt` - Russian IPv6 ranges in CIDR format
             - `russian-ip-combined.txt` - Combined Russian IPv4/IPv6 ranges
-            - `private-ranges.txt` - Private IP ranges
+            - `private-ranges.txt` - Bogon IP ranges
             - `telegram-ranges.txt` - Telegram IP ranges
             - `facebook-ranges.txt` - Facebook/Meta IP ranges
             - `RUSSIAN_GEOIP_README.md` - Statistics and usage info
@@ -486,7 +537,7 @@ jobs:
             }
             ```
 
-            Generated from MaxMind GeoLite2 and RIPE database on $(date).
+            Generated from the MaxMind GeoLite2 Country dataset on $(date).
           files: publish/*
           draft: false
           prerelease: false
@@ -494,6 +545,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Git for branch push
+        if: steps.check-update.outputs.release_exists == 'false'
         run: |
           cd publish
           git init
