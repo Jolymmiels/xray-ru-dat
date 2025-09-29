@@ -1,7 +1,20 @@
 #!/usr/bin/env python3
 
-import urllib.request
 import json
+import urllib.request
+from pathlib import Path
+
+OUTPUT_DIR = Path(__file__).resolve().parents[1] / "custom-ranges"
+
+
+def write_ranges(filename: str, ranges) -> int:
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    path = OUTPUT_DIR / filename
+    with path.open('w') as f:
+        for range_str in ranges:
+            f.write(f"{range_str}\n")
+    return len(ranges)
+
 
 def get_private_ranges():
     """Get bogon IP ranges"""
@@ -37,18 +50,13 @@ def get_private_ranges():
         "ff00::/8",
     ]
 
-    with open('private-ranges.txt', 'w') as f:
-        for range_str in bogon_networks:
-            f.write(f"{range_str}\n")
-
-    print(f"Created private ranges file with {len(bogon_networks)} ranges")
+    count = write_ranges('private-ranges.txt', bogon_networks)
+    print(f"Created private ranges file with {count} ranges")
     return bogon_networks
+
 
 def get_telegram_ranges():
     """Get Telegram IP ranges"""
-    telegram_ranges = []
-
-    # From Telegram's official documentation
     known_telegram_ranges = [
         "149.154.160.0/20",
         "149.154.164.0/22",
@@ -67,21 +75,16 @@ def get_telegram_ranges():
         "2001:67c:4e8::/48"
     ]
 
-    telegram_ranges.extend(known_telegram_ranges)
+    count = write_ranges('telegram-ranges.txt', known_telegram_ranges)
+    print(f"Created Telegram ranges file with {count} ranges")
+    return known_telegram_ranges
 
-    with open('telegram-ranges.txt', 'w') as f:
-        for range_str in telegram_ranges:
-            f.write(f"{range_str}\n")
-
-    print(f"Created Telegram ranges file with {len(telegram_ranges)} ranges")
-    return telegram_ranges
 
 def get_facebook_ranges():
     """Get Facebook IP ranges"""
     facebook_ranges = []
 
     try:
-        # Facebook provides their IP ranges via API
         with urllib.request.urlopen('https://graph.facebook.com/facebook_ips') as response:
             if response.status == 200:
                 data = json.loads(response.read().decode())
@@ -89,9 +92,7 @@ def get_facebook_ranges():
                 facebook_ranges.extend(data.get('ipv6_cidrs', []))
     except Exception as e:
         print(f"Could not fetch Facebook ranges from API: {e}")
-
-        # Fallback to known Facebook/Meta ranges
-        known_facebook_ranges = [
+        facebook_ranges.extend([
             "31.13.24.0/21",
             "31.13.64.0/18",
             "31.13.68.0/22",
@@ -115,15 +116,12 @@ def get_facebook_ranges():
             "2620:0:1c00::/40",
             "2620:0:1cff::/48",
             "2a03:2880:f000::/36"
-        ]
-        facebook_ranges.extend(known_facebook_ranges)
+        ])
 
-    with open('facebook-ranges.txt', 'w') as f:
-        for range_str in facebook_ranges:
-            f.write(f"{range_str}\n")
-
-    print(f"Created Facebook ranges file with {len(facebook_ranges)} ranges")
+    count = write_ranges('facebook-ranges.txt', facebook_ranges)
+    print(f"Created Facebook ranges file with {count} ranges")
     return facebook_ranges
+
 
 def main():
     private_ranges = get_private_ranges()
@@ -134,6 +132,7 @@ def main():
     print(f"- Private ranges: {len(private_ranges)}")
     print(f"- Telegram ranges: {len(telegram_ranges)}")
     print(f"- Facebook ranges: {len(facebook_ranges)}")
+
 
 if __name__ == "__main__":
     main()
