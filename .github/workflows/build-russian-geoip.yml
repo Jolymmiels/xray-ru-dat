@@ -311,18 +311,20 @@ jobs:
           import json
           import pathlib
 
+          base_dir = pathlib.Path('.').resolve()
+
           inputs = [
               {
                   "type": "text",
                   "action": "add",
                   "args": {
                       "name": "ru",
-                      "uri": "russian-ip-combined.txt"
+                      "uri": str(base_dir.joinpath('russian-ip-combined.txt').resolve())
                   }
               }
           ]
 
-          for path in sorted(pathlib.Path("custom-ranges").glob("*.txt")):
+          for path in sorted(pathlib.Path('custom-ranges').glob('*.txt')):
               name = path.stem
               inputs.append(
                   {
@@ -330,7 +332,7 @@ jobs:
                       "action": "add",
                       "args": {
                           "name": name,
-                          "uri": str(path)
+                          "uri": str(base_dir.joinpath(path).resolve())
                       }
                   }
               )
@@ -342,14 +344,14 @@ jobs:
                       "type": "v2rayGeoIPDat",
                       "action": "output",
                       "args": {
-                          "outputDir": "output",
+                          "outputDir": str(base_dir.joinpath('output').resolve()),
                           "outputName": "geoip.dat"
                       }
                   }
               ]
           }
 
-          pathlib.Path("geoip-config.json").write_text(json.dumps(config, indent=2))
+          pathlib.Path('geoip-config.json').write_text(json.dumps(config, indent=2))
           EOF
 
       - name: Download and setup geoip generation tools
