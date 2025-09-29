@@ -50,7 +50,7 @@ def get_private_ranges():
         "ff00::/8",
     ]
 
-    count = write_ranges('private-ranges.txt', bogon_networks)
+    count = write_ranges('private.txt', bogon_networks)
     print(f"Created private ranges file with {count} ranges")
     return bogon_networks
 
@@ -75,7 +75,7 @@ def get_telegram_ranges():
         "2001:67c:4e8::/48"
     ]
 
-    count = write_ranges('telegram-ranges.txt', known_telegram_ranges)
+    count = write_ranges('telegram.txt', known_telegram_ranges)
     print(f"Created Telegram ranges file with {count} ranges")
     return known_telegram_ranges
 
@@ -118,7 +118,7 @@ def get_facebook_ranges():
             "2a03:2880:f000::/36"
         ])
 
-    count = write_ranges('facebook-ranges.txt', facebook_ranges)
+    count = write_ranges('facebook.txt', facebook_ranges)
     print(f"Created Facebook ranges file with {count} ranges")
     return facebook_ranges
 

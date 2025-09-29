@@ -314,7 +314,7 @@ jobs:
           ]
 
           for path in sorted(pathlib.Path("custom-ranges").glob("*.txt")):
-              name = path.stem.replace('-ranges', '')
+              name = path.stem
               inputs.append(
                   {
                       "type": "text",
