@@ -24,19 +24,26 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          HEADERS=$(curl -sI "$MAXMIND_COUNTRY_URL")
-          LAST_MODIFIED=$(echo "$HEADERS" | grep -i '^last-modified:' | cut -d: -f2- | xargs || true)
-          if [ -z "$LAST_MODIFIED" ]; then
+          API_URL="https://api.github.com/repos/Loyalsoldier/geoip/commits?sha=release&path=GeoLite2-Country-CSV.zip&per_page=1"
+          RESPONSE=$(curl -sS -H "Accept: application/vnd.github+json" -H "Authorization: Bearer ${GITHUB_TOKEN}" "$API_URL")
+          LATEST_SHA=$(echo "$RESPONSE" | jq -r '.[0].sha')
+          LATEST_DATE=$(echo "$RESPONSE" | jq -r '.[0].commit.author.date')
+          if [ -z "$LATEST_SHA" ] || [ "$LATEST_SHA" = "null" ]; then
+            echo "Unable to determine MaxMind dataset commit"
+            exit 1
+          fi
+          if [ -z "$LATEST_DATE" ] || [ "$LATEST_DATE" = "null" ]; then
             echo "Unable to determine MaxMind dataset timestamp"
             exit 1
           fi
-          MAXMIND_DATE=$(date -u -d "$LAST_MODIFIED" +%Y%m%d)
-          echo "MaxMind release date: $MAXMIND_DATE"
+          MAXMIND_DATE=$(date -u -d "$LATEST_DATE" +%Y%m%d)
+          echo "MaxMind latest commit: $LATEST_SHA ($MAXMIND_DATE)"
           echo "maxmind_date=$MAXMIND_DATE" >> $GITHUB_OUTPUT
+          echo "maxmind_sha=$LATEST_SHA" >> $GITHUB_OUTPUT
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/tags/maxmind-$MAXMIND_DATE")
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/maxmind-$LATEST_SHA")
           if [ "$STATUS" = "200" ]; then
             echo "release_exists=true" >> $GITHUB_OUTPUT
             echo "No new MaxMind dataset available, skipping build"
@@ -47,14 +54,16 @@ jobs:
       - name: Skip build (dataset already released)
         if: steps.check-update.outputs.release_exists == 'true'
         run: |
-          echo "Release maxmind-${{ steps.check-update.outputs.maxmind_date }} already exists. Skipping remaining steps."
+          echo "Release maxmind-${{ steps.check-update.outputs.maxmind_sha }} already exists. Skipping remaining steps."
 
       - name: Set release metadata
         if: steps.check-update.outputs.release_exists == 'false'
         run: |
           DATE="${{ steps.check-update.outputs.maxmind_date }}"
-          echo "RELEASE_NAME=MaxMind GeoIP ${DATE}" >> $GITHUB_ENV
-          echo "TAG_NAME=maxmind-${DATE}" >> $GITHUB_ENV
+          SHA="${{ steps.check-update.outputs.maxmind_sha }}"
+          SHORT_SHA=${SHA:0:7}
+          echo "RELEASE_NAME=MaxMind GeoIP ${DATE} (${SHORT_SHA})" >> $GITHUB_ENV
+          echo "TAG_NAME=maxmind-${SHA}" >> $GITHUB_ENV
 
       - name: Setup Go
         if: steps.check-update.outputs.release_exists == 'false'
@@ -404,9 +413,9 @@ jobs:
             - `russian-ipv4-final.txt` - Russian IPv4 ranges in CIDR format
             - `russian-ipv6-final.txt` - Russian IPv6 ranges in CIDR format
             - `russian-ip-combined.txt` - Combined Russian IPv4/IPv6 ranges
-            - `private-ranges.txt` - Bogon IP ranges
-            - `telegram-ranges.txt` - Telegram IP ranges
-            - `facebook-ranges.txt` - Facebook/Meta IP ranges
+            - `private.txt` - Bogon IP ranges
+            - `telegram.txt` - Telegram IP ranges
+            - `facebook.txt` - Facebook/Meta IP ranges
             - `RUSSIAN_GEOIP_README.md` - Statistics and usage info
             - `checksums.sha256` - File checksums
 
