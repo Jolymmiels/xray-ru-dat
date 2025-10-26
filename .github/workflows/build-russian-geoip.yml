@@ -394,7 +394,7 @@ jobs:
 
       - name: Upload artifacts
         if: steps.check-update.outputs.release_exists == 'false'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: geoip-${{ env.TAG_NAME }}
           path: publish/*
