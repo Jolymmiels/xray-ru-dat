@@ -16,7 +16,7 @@ jobs:
       MAXMIND_COUNTRY_URL: https://github.com/Loyalsoldier/geoip/raw/release/GeoLite2-Country-CSV.zip
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Check MaxMind dataset freshness
         id: check-update
